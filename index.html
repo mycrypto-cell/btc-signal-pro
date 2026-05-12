@@ -1252,9 +1252,9 @@ function switchTab(tab) {
   if(tab==='history') renderHistoryTab();
   if(tab==='account') loadAccount();
   if(tab==='pnl') {
-    $('pnlEntry').value=fmt(currentPrice)||0;
-    $('pnlSL').value=fmt(currentSL)||0;
-    $('pnlTP').value=fmt(currentTP)||0;
+    $('pnlEntry').value=currentPrice>0?currentPrice.toFixed(currentPrice>100?2:4):0;
+    $('pnlSL').value=currentSL>0?currentSL.toFixed(currentSL>100?2:4):0;
+    $('pnlTP').value=currentTP>0?currentTP.toFixed(currentTP>100?2:4):0;
     $('pnlCapital').value=settings.capital;
     $('pnlLev').value=settings.leverage;
   }
