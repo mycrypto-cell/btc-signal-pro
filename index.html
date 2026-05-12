@@ -1090,8 +1090,8 @@ function generateSignal(price, rsi, macd, ma50, bb) {
 
   const strength=Math.min(Math.abs(score)/7*100, 100);
   let direction='NEUTRAL';
-  if(score>=3) direction='LONG';
-  else if(score<=-3) direction='SHORT';
+  if(score>=5) direction='LONG';
+  else if(score<=-5) direction='SHORT';
 
   return { direction, score, strength: Math.round(strength), signals };
 }
