@@ -700,7 +700,18 @@
       <span class="setting-label">Take-Profit (%)</span>
       <input class="setting-input" id="tpPct" type="number" value="6" min="1" max="20" step="0.5"/>
     </div>
-  </div>
+    <div class="setting-row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:14px;">
+      <span class="setting-label">🔑 Bybit API Key</span>
+      <input class="setting-input" id="bybitKey" type="text" placeholder="API Key" style="width:160px;font-size:10px;" oninput="saveApiKeys()"/>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">🔐 API Secret</span>
+      <input class="setting-input" id="bybitSecret" type="password" placeholder="Secret Key" style="width:160px;font-size:10px;" oninput="saveApiKeys()"/>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">ვაჭრობა API-ით</span>
+      <span id="apiStatus" style="font-size:10px;color:var(--muted);">⚪ შეიყვანე Key</span>
+    </div>
 
   <!-- INTERVAL SELECTOR -->
   <div class="settings-card" style="padding:14px 20px;">
@@ -726,6 +737,25 @@
   </button>
 
   <div class="update-time" id="updateTime">მონაცემები: Bybit API</div>
+
+  <!-- TRADE CONFIRMATION MODAL -->
+  <div id="tradeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:1000;align-items:flex-end;justify-content:center;">
+    <div style="background:var(--bg2);border-top-left-radius:24px;border-top-right-radius:24px;padding:24px;width:100%;max-width:480px;border-top:1px solid var(--border);">
+      <div id="tm-title" style="font-size:22px;font-weight:800;color:var(--text);margin-bottom:4px;"></div>
+      <div id="tm-coin" style="font-size:16px;color:var(--gold);font-weight:700;margin-bottom:2px;"></div>
+      <div id="tm-strength" style="font-size:12px;color:var(--muted);margin-bottom:16px;"></div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;"><span style="font-size:12px;color:var(--muted);">შესვლა</span><span id="tm-entry" style="font-size:14px;font-weight:700;color:var(--gold);"></span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="font-size:12px;color:var(--muted);">Stop-Loss</span><span id="tm-sl" style="font-size:14px;font-weight:700;color:var(--red);"></span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="font-size:12px;color:var(--muted);">Take-Profit</span><span id="tm-tp" style="font-size:14px;font-weight:700;color:var(--green);"></span></div>
+        <div style="display:flex;justify-content:space-between;"><span style="font-size:12px;color:var(--muted);">რაოდენობა</span><span id="tm-qty" style="font-size:14px;font-weight:700;color:var(--text);"></span></div>
+      </div>
+      <div style="display:flex;gap:12px;">
+        <button onclick="closeTrade()" style="flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:12px;padding:14px;color:var(--text);font-family:monospace;font-size:14px;font-weight:700;cursor:pointer;">❌ გაუქმება</button>
+        <button id="tm-confirm" onclick="confirmTrade()" style="flex:1;border-radius:12px;padding:14px;border:none;font-family:monospace;font-size:14px;font-weight:700;cursor:pointer;">✅ დადასტურება</button>
+      </div>
+    </div>
+  </div>
 
 </div>
 
@@ -874,12 +904,106 @@ function playChime(type) {
 }
 
 let prevSignalDir = null;
+let pendingTrade = null;
 
-function checkAndPlaySound(direction, coinName='BTC', strength=0) {
+// ===== API KEY STORAGE =====
+function saveApiKeys() {
+  const k = $('bybitKey')?.value || '';
+  const s = $('bybitSecret')?.value || '';
+  localStorage.setItem('bk', k);
+  localStorage.setItem('bs', s);
+  const st = $('apiStatus');
+  if(st) st.textContent = k && s ? '🟢 მზადაა' : '⚪ შეიყვანე Key';
+  if(st) st.style.color = k && s ? 'var(--green)' : 'var(--muted)';
+}
+
+function loadApiKeys() {
+  const k = localStorage.getItem('bk') || '';
+  const s = localStorage.getItem('bs') || '';
+  if($('bybitKey')) $('bybitKey').value = k;
+  if($('bybitSecret')) $('bybitSecret').value = s;
+  const st = $('apiStatus');
+  if(st) { st.textContent = k && s ? '🟢 მზადაა' : '⚪ შეიყვანე Key'; st.style.color = k && s ? 'var(--green)' : 'var(--muted)'; }
+}
+
+// ===== HMAC SHA256 (Web Crypto) =====
+async function hmacSHA256(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name:'HMAC',hash:'SHA-256'}, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+// ===== PLACE ORDER =====
+async function placeBybitOrder(symbol, side, qty, slPrice, tpPrice) {
+  const apiKey = localStorage.getItem('bk') || '';
+  const apiSecret = localStorage.getItem('bs') || '';
+  if(!apiKey || !apiSecret) return {retCode:-1, retMsg:'API Key არ არის შეყვანილი'};
+  const ts = Date.now().toString();
+  const recv = '5000';
+  const params = {category:'linear',symbol,side,orderType:'Market',qty:qty.toFixed(4),stopLoss:slPrice.toFixed(4),takeProfit:tpPrice.toFixed(4),timeInForce:'GTC',slTriggerBy:'LastPrice',tpTriggerBy:'LastPrice'};
+  const body = JSON.stringify(params);
+  const sign = await hmacSHA256(apiSecret, ts + apiKey + recv + body);
+  const res = await fetch('https://api.bybit.com/v5/order/create', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-BAPI-API-KEY':apiKey,'X-BAPI-TIMESTAMP':ts,'X-BAPI-RECV-WINDOW':recv,'X-BAPI-SIGN':sign},
+    body
+  });
+  return await res.json();
+}
+
+// ===== TRADE MODAL =====
+function showTradeModal(coinName, symbol, direction, price, strength) {
+  const apiKey = localStorage.getItem('bk') || '';
+  const apiSecret = localStorage.getItem('bs') || '';
+  if(!apiKey || !apiSecret) return;
+  const capital = parseFloat($('capital')?.value) || 100;
+  const lev = parseFloat($('leverage')?.value) || 3;
+  const sl = parseFloat($('slPct')?.value) || 3;
+  const tp = parseFloat($('tpPct')?.value) || 6;
+  const side = direction === 'LONG' ? 'Buy' : 'Sell';
+  const qty = (capital * lev) / price;
+  const slP = side === 'Buy' ? price*(1-sl/100) : price*(1+sl/100);
+  const tpP = side === 'Buy' ? price*(1+tp/100) : price*(1-tp/100);
+  pendingTrade = {symbol, side, qty, slP, tpP, direction};
+  $('tm-title').textContent = direction === 'LONG' ? '✅ LONG სიგნალი' : '🔴 SHORT სიგნალი';
+  $('tm-coin').textContent = coinName + '/USDT';
+  $('tm-strength').textContent = 'სიძლიერე: ' + strength + '%';
+  $('tm-entry').textContent = fmt(price);
+  $('tm-sl').textContent = fmt(slP);
+  $('tm-tp').textContent = fmt(tpP);
+  $('tm-qty').textContent = qty.toFixed(4);
+  $('tm-confirm').style.background = direction === 'LONG' ? 'var(--green)' : 'var(--red)';
+  $('tm-confirm').style.color = '#000';
+  $('tradeModal').style.display = 'flex';
+}
+
+function closeTrade() {
+  $('tradeModal').style.display = 'none';
+  pendingTrade = null;
+}
+
+async function confirmTrade() {
+  if(!pendingTrade) return;
+  $('tm-confirm').textContent = '⏳ იგზავნება...';
+  $('tm-confirm').disabled = true;
+  const res = await placeBybitOrder(pendingTrade.symbol, pendingTrade.side, pendingTrade.qty, pendingTrade.slP, pendingTrade.tpP);
+  closeTrade();
+  if(res.retCode === 0) {
+    alert('✅ ორდერი განთავსდა!\nID: ' + (res.result?.orderId || ''));
+  } else {
+    alert('❌ შეცდომა: ' + (res.retMsg || 'უცნობი შეცდომა'));
+  }
+  $('tm-confirm').textContent = '✅ დადასტურება';
+  $('tm-confirm').disabled = false;
+}
+
+function checkAndPlaySound(direction, coinName='BTC', strength=0, symbol='BTCUSDT') {
   const enabled = $('soundEnabled') && $('soundEnabled').checked;
   if (direction !== 'NEUTRAL' && direction !== prevSignalDir) {
     if (enabled) playChime(direction === 'LONG' ? 'long' : 'short');
     sendNotification(coinName, direction, strength);
+    showTradeModal(coinName, symbol, direction, currentPrice, strength);
     prevSignalDir = direction;
   }
 }
@@ -1020,7 +1144,7 @@ function updateUI(price, change24, high, low, vol, closes, sig, rsi, macd, ma50,
     pctEl.textContent=sig.strength+'%';
     pctEl.style.color=sig.strength>=60?'var(--green)':sig.strength>=40?'var(--gold)':'var(--red)';
   }
-  checkAndPlaySound(sig.direction, currentName, sig.strength);
+  checkAndPlaySound(sig.direction, currentName, sig.strength, currentSymbol);
 
   // Params
   const slPrice=sig.direction==='SHORT'?price*(1+slPct/100):price*(1-slPct/100);
@@ -1074,6 +1198,7 @@ async function loadData() {
 
     const t=ticker.result.list[0];
     const price=parseFloat(t.lastPrice);
+    currentPrice = price;
     const change=parseFloat(t.price24hPcnt)*100;
     const high=parseFloat(t.highPrice24h);
     const low=parseFloat(t.lowPrice24h);
@@ -1252,7 +1377,9 @@ function sendNotification(coinName, direction, strength) {
 }
 
 // ===== START =====
+let currentPrice = 0;
 if (Notification.permission === 'granted') updateNotifBtn(true);
+loadApiKeys();
 requestNotificationPermission();
 startAutoRefresh();
 </script>
