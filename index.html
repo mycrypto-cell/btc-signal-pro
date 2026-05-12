@@ -978,7 +978,12 @@ function calcPnL() {
 async function bybitPost(endpoint, body) {
   const key=settings.apiKey, secret=settings.apiSecret;
   if(!key||!secret) return null;
-  const ts=Date.now().toString(), recv='5000';
+  let ts;
+  try {
+    const tr=await fetch('https://api.bybit.com/v5/market/time').then(r=>r.json());
+    ts=tr.result?.timeNano?Math.floor(parseInt(tr.result.timeNano)/1000000).toString():tr.result?.timeSecond?(parseInt(tr.result.timeSecond)*1000).toString():Date.now().toString();
+  } catch(e){ts=Date.now().toString();}
+  const recv='20000';
   const bodyStr=JSON.stringify(body);
   const signStr=ts+key+recv+bodyStr;
   const cryptoKey=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
@@ -1086,8 +1091,15 @@ async function bybitSign(params) {
   const key = settings.apiKey;
   const secret = settings.apiSecret;
   if(!key||!secret) return null;
-  const ts = Date.now().toString();
-  const recv = '5000';
+  // Bybit სერვერის დრო ვიყენებთ — კომპიუტერის საათის სხვაობა პრობლემა არ შექმნის
+  let ts;
+  try {
+    const tr = await fetch('https://api.bybit.com/v5/market/time').then(r=>r.json());
+    ts = tr.result?.timeNano ? Math.floor(parseInt(tr.result.timeNano)/1000000).toString()
+       : tr.result?.timeSecond ? (parseInt(tr.result.timeSecond)*1000).toString()
+       : Date.now().toString();
+  } catch(e) { ts = Date.now().toString(); }
+  const recv = '20000';
   const qStr = Object.entries(params).map(([k,v])=>`${k}=${v}`).join('&');
   const signStr = ts + key + recv + qStr;
   const cryptoKey = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), {name:'HMAC',hash:'SHA-256'}, false, ['sign']);
