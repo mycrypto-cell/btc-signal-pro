@@ -1350,6 +1350,11 @@ async function loadSignalData() {
     const tpPrice=sig.direction==='SHORT'?price-atr*settings.tpMult:price+atr*settings.tpMult;
     currentSL=slPrice; currentTP=tpPrice;
 
+    // PnL ჩანართი ავტომატურად განახლება
+    $('pnlEntry').value=price.toFixed(price>100?2:4);
+    $('pnlSL').value=slPrice.toFixed(price>100?2:4);
+    $('pnlTP').value=tpPrice.toFixed(price>100?2:4);
+
     // Price card
     $('priceMain').textContent='$'+fmt(price);
     const chgEl=$('priceChange');
